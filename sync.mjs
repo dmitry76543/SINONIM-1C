@@ -32,10 +32,11 @@
  *   SYNC_SRC_OFFER=OfferArtNo
  *   SYNC_SRC_AMOUNT=Amount
  *   SYNC_SRC_PRICE=Price
- *   SYNC_DST_ARTNO=ArtNo
- *   SYNC_DST_OFFER=MultiOffer
- *   SYNC_DST_AMOUNT=Amount
- *   SYNC_DST_PRICE=Price
+ *   # выходной CSV как в ручном импорте (AdvantShop CSV 2.0):
+ *   # SYNC_DST_ARTNO=Артикул
+ *   # SYNC_DST_OFFER=Артикул модификации
+ *   # SYNC_DST_AMOUNT=Количество
+ *   # SYNC_DST_PRICE=Цена
  *   SYNC_SKIP_IF_UNCHANGED=true
  *   SYNC_WORK_DIR=./tmp/1c-sync
  */
@@ -78,11 +79,11 @@ const config = {
     price: process.env.SYNC_SRC_PRICE || "Price",
   },
   dst: {
-    // Имена колонок AdvantShop CSV лучше сверить с exportproducts
-    artNo: process.env.SYNC_DST_ARTNO || "ArtNo",
-    offer: process.env.SYNC_DST_OFFER || "MultiOffer",
-    amount: process.env.SYNC_DST_AMOUNT || "Amount",
-    price: process.env.SYNC_DST_PRICE || "Price",
+    // Ручной образец: Артикул;Артикул модификации;Количество;Цена
+    artNo: process.env.SYNC_DST_ARTNO || "Артикул",
+    offer: process.env.SYNC_DST_OFFER || "Артикул модификации",
+    amount: process.env.SYNC_DST_AMOUNT || "Количество",
+    price: process.env.SYNC_DST_PRICE || "Цена",
   },
   skipIfUnchanged:
     String(process.env.SYNC_SKIP_IF_UNCHANGED || "true").toLowerCase() !==
