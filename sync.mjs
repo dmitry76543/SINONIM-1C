@@ -93,19 +93,18 @@ const config = {
       process.env.ADVANTSHOP_ADMIN_URL ||
       "https://my.advantshop.net/437286-kfbw"
     ).replace(/\/$/, ""),
-    email: process.env.ADVANTSHOP_ADMIN_EMAIL || "",
-    password: process.env.ADVANTSHOP_ADMIN_PASSWORD || "",
+    email: envTrim("ADVANTSHOP_ADMIN_EMAIL"),
+    password: envTrim("ADVANTSHOP_ADMIN_PASSWORD"),
     onlyUpdate:
       String(process.env.SYNC_ADMIN_ONLY_UPDATE || "true").toLowerCase() !==
       "false",
   },
   postEnabled: (() => {
     const raw = process.env.SYNC_POST_ENABLED;
-    if (raw !== undefined && raw !== "") {
-      return String(raw).toLowerCase() === "true";
+    if (raw !== undefined && String(raw).trim() !== "") {
+      return String(raw).trim().toLowerCase() === "true";
     }
-    // по умолчанию: включено, если задан пароль админки
-    return Boolean(process.env.ADVANTSHOP_ADMIN_PASSWORD);
+    return Boolean(envTrim("ADVANTSHOP_ADMIN_PASSWORD"));
   })(),
   abortOnCreate:
     String(process.env.SYNC_ABORT_ON_CREATE || "true").toLowerCase() !==
@@ -122,12 +121,36 @@ const config = {
   workDir: resolve(root, process.env.SYNC_WORK_DIR || "./tmp/1c-sync"),
 };
 
+function envTrim(name) {
+  const v = process.env[name];
+  if (v === undefined || v === null) return "";
+  return String(v).trim();
+}
+
+function logAdminEnvDiagnostics() {
+  const email = envTrim("ADVANTSHOP_ADMIN_EMAIL");
+  const password = envTrim("ADVANTSHOP_ADMIN_PASSWORD");
+  const keys = Object.keys(process.env)
+    .filter((k) => /^ADVANTSHOP_/i.test(k) || /^SYNC_/i.test(k))
+    .sort();
+  console.log(
+    `[sync] env: ADMIN_EMAIL=${email ? "set" : "MISSING"}` +
+      ` ADMIN_PASSWORD=${password ? `set(len=${password.length})` : "MISSING"}` +
+      ` ADMIN_URL=${envTrim("ADVANTSHOP_ADMIN_URL") ? "set" : "default"}` +
+      ` UPLOAD_MODE=${process.env.SYNC_UPLOAD_MODE || "admin(default)"}` +
+      ` POST_ENABLED=${process.env.SYNC_POST_ENABLED ?? "(auto)"}` +
+      ` ENCODING=${process.env.SYNC_OUT_ENCODING || "utf8(default)"}`,
+  );
+  console.log(`[sync] env keys: ${keys.join(", ") || "(none)"}`);
+}
+
 main().catch((error) => {
   console.error("[sync] fatal:", error?.message || error);
   process.exit(1);
 });
 
 async function main() {
+  logAdminEnvDiagnostics();
   mkdirSync(config.workDir, { recursive: true });
 
   const sourcePath = localFileArg
@@ -178,7 +201,9 @@ async function main() {
   if (config.uploadMode === "admin") {
     if (!config.admin.email || !config.admin.password) {
       throw new Error(
-        "Admin upload requires ADVANTSHOP_ADMIN_EMAIL and ADVANTSHOP_ADMIN_PASSWORD",
+        "Admin upload requires ADVANTSHOP_ADMIN_EMAIL and ADVANTSHOP_ADMIN_PASSWORD " +
+          `(email=${config.admin.email ? "ok" : "empty"}, password=${config.admin.password ? "ok" : "empty"}). ` +
+          "Проверьте, что переменные в ЭТОМ Cron Job (Варшава), этап Запуск, и контейнеры перезапущены.",
       );
     }
     console.log(`[sync] admin import via ${config.admin.baseUrl}/adminv3/import`);
