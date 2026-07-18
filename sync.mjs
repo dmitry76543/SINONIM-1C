@@ -46,6 +46,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import iconv from "iconv-lite";
+import { importCsvViaAdmin } from "./admin-import.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = __dirname;
@@ -85,8 +86,27 @@ const config = {
   // utf8 (с BOM) | windows-1251 — ручной образец Sinonim был UTF-8 BOM
   outEncoding: (process.env.SYNC_OUT_ENCODING || "utf8").toLowerCase(),
   maxRows: Number(process.env.SYNC_MAX_ROWS || 0) || 0,
-  postEnabled:
-    String(process.env.SYNC_POST_ENABLED || "false").toLowerCase() === "true",
+  // admin = CSV 2.0 через админку (рабочий путь); api = /api/1c/importproducts (ломает каталог)
+  uploadMode: (process.env.SYNC_UPLOAD_MODE || "admin").toLowerCase(),
+  admin: {
+    baseUrl: (
+      process.env.ADVANTSHOP_ADMIN_URL ||
+      "https://my.advantshop.net/437286-kfbw"
+    ).replace(/\/$/, ""),
+    email: process.env.ADVANTSHOP_ADMIN_EMAIL || "",
+    password: process.env.ADVANTSHOP_ADMIN_PASSWORD || "",
+    onlyUpdate:
+      String(process.env.SYNC_ADMIN_ONLY_UPDATE || "true").toLowerCase() !==
+      "false",
+  },
+  postEnabled: (() => {
+    const raw = process.env.SYNC_POST_ENABLED;
+    if (raw !== undefined && raw !== "") {
+      return String(raw).toLowerCase() === "true";
+    }
+    // по умолчанию: включено, если задан пароль админки
+    return Boolean(process.env.ADVANTSHOP_ADMIN_PASSWORD);
+  })(),
   abortOnCreate:
     String(process.env.SYNC_ABORT_ON_CREATE || "true").toLowerCase() !==
     "false",
@@ -149,28 +169,67 @@ async function main() {
     console.log(
       dryRun
         ? "[sync] dry-run: upload skipped"
-        : "[sync] SYNC_POST_ENABLED!=true: upload skipped (safe mode). CSV ready for admin CSV 2.0 import.",
+        : "[sync] upload skipped (set ADVANTSHOP_ADMIN_PASSWORD or SYNC_POST_ENABLED=true)",
     );
     console.log(advantCsv.split(/\r?\n/).slice(0, 6).join("\n"));
     return;
   }
 
-  const importUrl = resolveImportUrl();
-  console.log(`[sync] posting to: ${maskUrl(importUrl)}`);
-  const responseText = await postCsvToAdvantShop(importUrl, outBuf);
-  writeFileSync(join(config.workDir, "last-response.txt"), responseText, "utf8");
-  console.log("[sync] AdvantShop response:");
-  console.log(responseText.slice(0, 2000) || "(empty)");
-
-  const added = (responseText.match(/Товар добавлен/gi) || []).length;
-  const updated = (responseText.match(/Товар обновлен/gi) || []).length;
-  if (added) {
-    console.error(
-      `[sync] FATAL: AdvantShop created ${added} new product(s)` +
-        (updated ? `, updated ${updated}` : "") +
-        ". /api/1c/importproducts does not match modification ArtNo. Aborting.",
+  if (config.uploadMode === "admin") {
+    if (!config.admin.email || !config.admin.password) {
+      throw new Error(
+        "Admin upload requires ADVANTSHOP_ADMIN_EMAIL and ADVANTSHOP_ADMIN_PASSWORD",
+      );
+    }
+    console.log(`[sync] admin import via ${config.admin.baseUrl}/adminv3/import`);
+    const stats = await importCsvViaAdmin({
+      adminBaseUrl: config.admin.baseUrl,
+      email: config.admin.email,
+      password: config.admin.password,
+      csvBuffer: outBuf,
+      filename: "stocks-import.csv",
+      encoding: config.outEncoding,
+      onlyUpdateProducts: config.admin.onlyUpdate,
+      log: console.log,
+    });
+    writeFileSync(
+      join(config.workDir, "last-response.txt"),
+      JSON.stringify(stats, null, 2),
+      "utf8",
     );
-    if (config.abortOnCreate) process.exit(1);
+    const added = Number(stats.Add || 0);
+    const updated = Number(stats.Update || 0);
+    const errors = Number(stats.Error || 0);
+    console.log(
+      `[sync] admin done: add=${added} update=${updated} error=${errors}`,
+    );
+    if (added > 0 && config.abortOnCreate) {
+      console.error(
+        `[sync] FATAL: admin import created ${added} product(s); enable OnlyUpdateProducts / check mapping`,
+      );
+      process.exit(1);
+    }
+    if (errors > 0) {
+      console.warn(`[sync] admin reported ${errors} error row(s)`);
+    }
+  } else {
+    const importUrl = resolveImportUrl();
+    console.log(`[sync] posting to: ${maskUrl(importUrl)}`);
+    const responseText = await postCsvToAdvantShop(importUrl, outBuf);
+    writeFileSync(join(config.workDir, "last-response.txt"), responseText, "utf8");
+    console.log("[sync] AdvantShop response:");
+    console.log(responseText.slice(0, 2000) || "(empty)");
+
+    const added = (responseText.match(/Товар добавлен/gi) || []).length;
+    const updated = (responseText.match(/Товар обновлен/gi) || []).length;
+    if (added) {
+      console.error(
+        `[sync] FATAL: AdvantShop created ${added} new product(s)` +
+          (updated ? `, updated ${updated}` : "") +
+          ". /api/1c/importproducts does not match modification ArtNo. Aborting.",
+      );
+      if (config.abortOnCreate) process.exit(1);
+    }
   }
 
   writeFileSync(hashPath, hash, "utf8");
