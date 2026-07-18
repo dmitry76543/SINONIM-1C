@@ -32,11 +32,11 @@
  *   SYNC_SRC_OFFER=OfferArtNo
  *   SYNC_SRC_AMOUNT=Amount
  *   SYNC_SRC_PRICE=Price
- *   # выходной CSV как в ручном импорте (AdvantShop CSV 2.0):
- *   # SYNC_DST_ARTNO=Артикул
- *   # SYNC_DST_OFFER=Артикул модификации
- *   # SYNC_DST_AMOUNT=Количество
- *   # SYNC_DST_PRICE=Цена
+ *   # Выход для /api/1c/importproducts = CSV 1.0 MultiOffer (по умолчанию):
+ *   #   ArtNo;MultiOffer
+ *   #   802-02763;[802-02763-7:7::15635::2]
+ *   # Ручной админ-импорт CSV 2.0 (Артикул;Артикул модификации;…) API НЕ понимает.
+ *   # SYNC_OUT_FORMAT=multioffer|columns
  *   SYNC_SKIP_IF_UNCHANGED=true
  *   SYNC_WORK_DIR=./tmp/1c-sync
  */
@@ -78,12 +78,13 @@ const config = {
     amount: process.env.SYNC_SRC_AMOUNT || "Amount",
     price: process.env.SYNC_SRC_PRICE || "Price",
   },
+  // multioffer = CSV 1.0 для API 1C; columns = плоские колонки (только админ CSV 2.0)
+  outFormat: (process.env.SYNC_OUT_FORMAT || "multioffer").toLowerCase(),
   dst: {
-    // Ручной образец: Артикул;Артикул модификации;Количество;Цена
-    artNo: process.env.SYNC_DST_ARTNO || "Артикул",
-    offer: process.env.SYNC_DST_OFFER || "Артикул модификации",
-    amount: process.env.SYNC_DST_AMOUNT || "Количество",
-    price: process.env.SYNC_DST_PRICE || "Цена",
+    artNo: process.env.SYNC_DST_ARTNO || "ArtNo",
+    offer: process.env.SYNC_DST_OFFER || "MultiOffer",
+    amount: process.env.SYNC_DST_AMOUNT || "Amount",
+    price: process.env.SYNC_DST_PRICE || "Price",
   },
   skipIfUnchanged:
     String(process.env.SYNC_SKIP_IF_UNCHANGED || "true").toLowerCase() !==
@@ -268,6 +269,35 @@ function transformToAdvantShopCsv(sourceText) {
     }
   }
 
+  /** @type {{ artNo: string, offer: string, amount: string, price: string }[]} */
+  const rows = [];
+  for (const line of lines.slice(1)) {
+    const cols = parseCsvLine(line, delimiter);
+    const artNo = (cols[idx.artNo] || "").trim();
+    const offer = (cols[idx.offer] || "").trim() || artNo;
+    const amount = normalizeNumber(cols[idx.amount]);
+    const price = normalizeNumber(cols[idx.price]);
+    if (!artNo) continue;
+    rows.push({ artNo, offer, amount, price });
+  }
+
+  if (!rows.length) {
+    throw new Error("No valid data rows after transform");
+  }
+
+  const csv =
+    config.outFormat === "columns"
+      ? buildColumnsCsv(rows)
+      : buildMultiOfferCsv(rows);
+
+  console.log(`[sync] out format: ${config.outFormat === "columns" ? "columns" : "multioffer (CSV 1.0)"}`);
+
+  // UTF-8 BOM помогает Excel/некоторым парсерам Windows
+  return `\uFEFF${csv}`;
+}
+
+/** Плоские колонки (как ручной CSV 2.0) — /api/1c/importproducts их обычно не понимает. */
+function buildColumnsCsv(rows) {
   const outHeader = [
     config.dst.artNo,
     config.dst.offer,
@@ -275,29 +305,50 @@ function transformToAdvantShopCsv(sourceText) {
     config.dst.price,
   ];
   const outRows = [outHeader.join(";")];
-
-  for (const line of lines.slice(1)) {
-    const cols = parseCsvLine(line, delimiter);
-    const artNo = (cols[idx.artNo] || "").trim();
-    const offer = (cols[idx.offer] || "").trim();
-    const amount = normalizeNumber(cols[idx.amount]);
-    const price = normalizeNumber(cols[idx.price]);
-
-    if (!artNo) continue;
-
+  for (const row of rows) {
     outRows.push(
-      [escapeCsv(artNo), escapeCsv(offer), escapeCsv(amount), escapeCsv(price)].join(
-        ";",
-      ),
+      [
+        escapeCsv(row.artNo),
+        escapeCsv(row.offer),
+        escapeCsv(row.amount),
+        escapeCsv(row.price),
+      ].join(";"),
     );
   }
+  return `${outRows.join("\r\n")}\r\n`;
+}
 
-  if (outRows.length < 2) {
-    throw new Error("No valid data rows after transform");
+/**
+ * CSV 1.0 для API 1C: ArtNo + MultiOffer
+ * MultiOffer = [offer:size:color:price:purchaseprice:amount],…
+ * @see https://www.advantshop.net/help/pages/import-csv
+ */
+function buildMultiOfferCsv(rows) {
+  /** @type {Map<string, string[]>} */
+  const byArt = new Map();
+
+  for (const row of rows) {
+    const size = extractSizeFromOffer(row.artNo, row.offer);
+    const cell = `[${row.offer}:${size}::${row.price}::${row.amount}]`;
+    const list = byArt.get(row.artNo) || [];
+    list.push(cell);
+    byArt.set(row.artNo, list);
   }
 
-  // UTF-8 BOM помогает Excel/некоторым парсерам Windows
-  return `\uFEFF${outRows.join("\r\n")}\r\n`;
+  const outRows = ["ArtNo;MultiOffer"];
+  for (const [artNo, offers] of byArt) {
+    outRows.push(`${escapeCsv(artNo)};${escapeCsv(offers.join(","))}`);
+  }
+  return `${outRows.join("\r\n")}\r\n`;
+}
+
+/** 802-02763 + 802-02763-7 → "7"; если оффер = артикул → "" */
+function extractSizeFromOffer(artNo, offer) {
+  const prefix = `${artNo}-`;
+  if (offer.startsWith(prefix) && offer.length > prefix.length) {
+    return offer.slice(prefix.length);
+  }
+  return "";
 }
 
 function findColumnIndex(header, name) {
