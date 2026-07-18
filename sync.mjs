@@ -101,6 +101,8 @@ const config = {
     onlyUpdate:
       String(process.env.SYNC_ADMIN_ONLY_UPDATE || "true").toLowerCase() !==
       "false",
+    // none|delete|deactivate|zero — товары магазина, которых нет в CSV из 1С
+    missingAction: (process.env.SYNC_ADMIN_MISSING_ACTION || "zero").toLowerCase(),
   },
   postEnabled: (() => {
     const raw = process.env.SYNC_POST_ENABLED;
@@ -210,6 +212,14 @@ async function main() {
       );
     }
     console.log(`[sync] admin import via ${config.admin.baseUrl}/adminv3/import`);
+    let missingAction = config.admin.missingAction;
+    if (config.maxRows > 0 && missingAction !== "none" && missingAction !== "0") {
+      console.warn(
+        `[sync] SYNC_MAX_ROWS=${config.maxRows}: missing-in-file action forced to none ` +
+          `(иначе обнулится почти весь каталог)`,
+      );
+      missingAction = "none";
+    }
     const stats = await importCsvViaAdmin({
       adminBaseUrl: config.admin.baseUrl,
       email: config.admin.email,
@@ -218,6 +228,7 @@ async function main() {
       filename: "stocks-import.csv",
       encoding: config.outEncoding,
       onlyUpdateProducts: config.admin.onlyUpdate,
+      productActionType: missingAction,
       log: console.log,
     });
     writeFileSync(
@@ -229,6 +240,7 @@ async function main() {
           Error: stats.Error,
           updatedArts: stats.updatedArts,
           addedArts: stats.addedArts,
+          zeroedArts: stats.zeroedArts,
           errorLines: stats.errorLines,
         },
         null,
@@ -485,6 +497,12 @@ function logArtResults(rows, stats) {
   if (addedFromLog.length) {
     console.log(
       `[sync] добавлены (${addedFromLog.length}): ${addedFromLog.join(", ")}`,
+    );
+  }
+  const zeroed = stats.zeroedArts || [];
+  if (zeroed.length) {
+    console.log(
+      `[sync] обнулены остатки (${zeroed.length}): ${zeroed.join(", ")}`,
     );
   }
   if (stats.errorLines?.length) {

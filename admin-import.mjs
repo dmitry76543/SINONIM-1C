@@ -1,6 +1,9 @@
 /**
  * AdvantShop admin CSV 2.0 import (Товары → Импорт данных).
  * Matches by «Артикул модификации», supports OnlyUpdateProducts.
+ *
+ * productActionType — действие с товарами, которых нет в CSV:
+ *   0 none | 1 delete | 2 deactivate | 3 zero stock
  */
 export async function importCsvViaAdmin({
   adminBaseUrl,
@@ -10,6 +13,7 @@ export async function importCsvViaAdmin({
   filename = "import.csv",
   encoding = "UTF-8",
   onlyUpdateProducts = true,
+  productActionType = "3",
   pollMs = 1500,
   pollTimeoutMs = 10 * 60 * 1000,
   log = console.log,
@@ -17,12 +21,16 @@ export async function importCsvViaAdmin({
   const root = adminBaseUrl.replace(/\/$/, "");
   const apiBase = `${root}/adminv3`;
   const jar = new Map();
+  const actionType = normalizeProductActionType(productActionType);
 
   await adminLogin(root, email, password, jar);
   const token = await fetchAntiforgeryToken(apiBase, jar);
 
   await uploadCsvFile(apiBase, jar, token, csvBuffer, filename);
   log("[sync] admin: CSV uploaded");
+  log(
+    `[sync] admin: missing-in-file action=${describeProductAction(actionType)} (${actionType})`,
+  );
 
   const settings = {
     Encoding: encoding === "windows-1251" || encoding === "win1251" ? "Windows-1251" : "UTF-8",
@@ -32,7 +40,7 @@ export async function importCsvViaAdmin({
     HaveHeader: true,
     csvV2: "true",
     OnlyUpdateProducts: onlyUpdateProducts,
-    ProductActionType: "0",
+    ProductActionType: actionType,
     ImportRemainsType: "normal",
     UpdatePhotos: false,
     Enabled301Redirects: false,
@@ -249,14 +257,54 @@ async function fetchImportLogFile(apiBase, jar, token) {
   return await res.text();
 }
 
+/** @param {string|number} value */
+export function normalizeProductActionType(value) {
+  const raw = String(value ?? "3").trim().toLowerCase();
+  const map = {
+    "0": "0",
+    none: "0",
+    nothing: "0",
+    "1": "1",
+    delete: "1",
+    remove: "1",
+    "2": "2",
+    deactivate: "2",
+    disable: "2",
+    "3": "3",
+    zero: "3",
+    zero_stock: "3",
+    "zero-stock": "3",
+    nulling: "3",
+  };
+  if (!(raw in map)) {
+    throw new Error(
+      `Unknown ProductActionType "${value}" (use none|delete|deactivate|zero or 0..3)`,
+    );
+  }
+  return map[raw];
+}
+
+export function describeProductAction(type) {
+  return (
+    {
+      0: "none",
+      1: "delete",
+      2: "deactivate",
+      3: "zero-stock",
+    }[String(type)] || String(type)
+  );
+}
+
 /**
  * AdvantShop log lines look like:
  *   Товар обновлен: 802-03159
  *   Товар добавлен: ...
+ *   Остаток обнулен: ...
  */
 export function parseImportLog(logText) {
   const updated = [];
   const added = [];
+  const zeroed = [];
   const errors = [];
   for (const raw of String(logText || "").split(/\r?\n/)) {
     const line = raw.trim();
@@ -271,11 +319,26 @@ export function parseImportLog(logText) {
       added.push(m[1].trim());
       continue;
     }
+    m = line.match(/^(?:Остаток обнулен|Количество обнулено|Обнулен остаток):\s*(.+)$/i);
+    if (m) {
+      zeroed.push(m[1].trim());
+      continue;
+    }
+    if (/обнул/i.test(line) && /:\s*\S+/.test(line)) {
+      const art = line.split(":").slice(1).join(":").trim();
+      if (art) zeroed.push(art);
+      continue;
+    }
     if (/ошибк|error|не найден/i.test(line) && !/^Конец|^Начало|^Запуск|^Окончание/i.test(line)) {
       errors.push(line);
     }
   }
-  return { updatedArts: updated, addedArts: added, errorLines: errors };
+  return {
+    updatedArts: updated,
+    addedArts: added,
+    zeroedArts: zeroed,
+    errorLines: errors,
+  };
 }
 
 /**
