@@ -306,9 +306,14 @@ export function parseImportLog(logText) {
   const added = [];
   const zeroed = [];
   const errors = [];
+  let zeroStockActionRan = false;
   for (const raw of String(logText || "").split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
+    if (/^Обнулить остатки$/i.test(line)) {
+      zeroStockActionRan = true;
+      continue;
+    }
     let m = line.match(/^Товар обновлен:\s*(.+)$/i);
     if (m) {
       updated.push(m[1].trim());
@@ -337,6 +342,7 @@ export function parseImportLog(logText) {
     updatedArts: updated,
     addedArts: added,
     zeroedArts: zeroed,
+    zeroStockActionRan,
     errorLines: errors,
   };
 }

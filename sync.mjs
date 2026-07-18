@@ -241,6 +241,7 @@ async function main() {
           updatedArts: stats.updatedArts,
           addedArts: stats.addedArts,
           zeroedArts: stats.zeroedArts,
+          zeroStockActionRan: stats.zeroStockActionRan,
           errorLines: stats.errorLines,
         },
         null,
@@ -503,6 +504,10 @@ function logArtResults(rows, stats) {
   if (zeroed.length) {
     console.log(
       `[sync] обнулены остатки (${zeroed.length}): ${zeroed.join(", ")}`,
+    );
+  } else if (stats.zeroStockActionRan) {
+    console.log(
+      "[sync] обнуление остатков: выполнено (AdvantShop не перечисляет артикулы)",
     );
   }
   if (stats.errorLines?.length) {
