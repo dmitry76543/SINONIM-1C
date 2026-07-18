@@ -46,7 +46,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import iconv from "iconv-lite";
-import { importCsvViaAdmin } from "./admin-import.mjs";
+import {
+  classifyImportArts,
+  importCsvViaAdmin,
+} from "./admin-import.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = __dirname;
@@ -180,7 +183,7 @@ async function main() {
     }
   }
 
-  const advantCsv = transformToAdvantShopCsv(text);
+  const { csv: advantCsv, rows: syncRows } = transformToAdvantShopCsv(text);
   const outPath = join(config.workDir, "advantshop-import.csv");
   const outBuf = encodeCsvOutput(advantCsv);
   writeFileSync(outPath, outBuf);
@@ -219,15 +222,30 @@ async function main() {
     });
     writeFileSync(
       join(config.workDir, "last-response.txt"),
-      JSON.stringify(stats, null, 2),
+      JSON.stringify(
+        {
+          Add: stats.Add,
+          Update: stats.Update,
+          Error: stats.Error,
+          updatedArts: stats.updatedArts,
+          addedArts: stats.addedArts,
+          errorLines: stats.errorLines,
+        },
+        null,
+        2,
+      ),
       "utf8",
     );
+    if (stats.logText) {
+      writeFileSync(join(config.workDir, "last-import-log.txt"), stats.logText, "utf8");
+    }
     const added = Number(stats.Add || 0);
     const updated = Number(stats.Update || 0);
     const errors = Number(stats.Error || 0);
     console.log(
       `[sync] admin done: add=${added} update=${updated} error=${errors}`,
     );
+    logArtResults(syncRows, stats);
     if (added > 0 && config.abortOnCreate) {
       console.error(
         `[sync] FATAL: admin import created ${added} product(s); enable OnlyUpdateProducts / check mapping`,
@@ -438,7 +456,43 @@ function transformToAdvantShopCsv(sourceText) {
   console.log(`[sync] out format: ${formatLabel}`);
 
   // BOM для utf8 добавляется в encodeCsvOutput
-  return csv;
+  return { csv, rows };
+}
+
+function logArtResults(rows, stats) {
+  const fromLog = stats.updatedArts || [];
+  const addedFromLog = stats.addedArts || [];
+  const { updated, notUpdated } = classifyImportArts(
+    rows,
+    fromLog,
+    addedFromLog,
+  );
+
+  if (!fromLog.length && Number(stats.Update || 0) > 0) {
+    console.warn(
+      "[sync] лог импорта AdvantShop пуст или без «Товар обновлен» — сверка артикулов неполная",
+    );
+  }
+
+  console.log(
+    `[sync] обновлены (${updated.length}): ${updated.length ? updated.join(", ") : "—"}`,
+  );
+  console.log(
+    `[sync] не обновлены (${notUpdated.length}): ${
+      notUpdated.length ? notUpdated.join(", ") : "—"
+    }`,
+  );
+  if (addedFromLog.length) {
+    console.log(
+      `[sync] добавлены (${addedFromLog.length}): ${addedFromLog.join(", ")}`,
+    );
+  }
+  if (stats.errorLines?.length) {
+    console.warn(
+      `[sync] ошибки в логе импорта (${stats.errorLines.length}):`,
+    );
+    for (const line of stats.errorLines) console.warn(`  ${line}`);
+  }
 }
 
 /**

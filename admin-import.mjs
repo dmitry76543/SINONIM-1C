@@ -73,7 +73,10 @@ export async function importCsvViaAdmin({
     pollTimeoutMs,
     log,
   });
-  return stats;
+
+  const logText = await fetchImportLogFile(apiBase, jar, token);
+  const parsed = parseImportLog(logText);
+  return { ...stats, logText, ...parsed };
 }
 
 function mergeCookies(jar, res) {
@@ -231,4 +234,69 @@ async function waitForImport(apiBase, jar, token, { pollMs, pollTimeoutMs, log }
   throw new Error(
     `admin import timeout after ${pollTimeoutMs}ms; last=${JSON.stringify(last).slice(0, 400)}`,
   );
+}
+
+async function fetchImportLogFile(apiBase, jar, token) {
+  const res = await fetch(`${apiBase}/ExportImportCommon/getlogfile`, {
+    headers: {
+      ...authHeaders(jar, token),
+      Referer: `${apiBase}/import`,
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`admin getlogfile HTTP ${res.status}`);
+  }
+  return await res.text();
+}
+
+/**
+ * AdvantShop log lines look like:
+ *   Товар обновлен: 802-03159
+ *   Товар добавлен: ...
+ */
+export function parseImportLog(logText) {
+  const updated = [];
+  const added = [];
+  const errors = [];
+  for (const raw of String(logText || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    let m = line.match(/^Товар обновлен:\s*(.+)$/i);
+    if (m) {
+      updated.push(m[1].trim());
+      continue;
+    }
+    m = line.match(/^Товар добавлен:\s*(.+)$/i);
+    if (m) {
+      added.push(m[1].trim());
+      continue;
+    }
+    if (/ошибк|error|не найден/i.test(line) && !/^Конец|^Начало|^Запуск|^Окончание/i.test(line)) {
+      errors.push(line);
+    }
+  }
+  return { updatedArts: updated, addedArts: added, errorLines: errors };
+}
+
+/**
+ * Match CSV rows against arts from AdvantShop import log.
+ * Log usually lists parent ArtNo; we also accept OfferArtNo.
+ */
+export function classifyImportArts(rows, updatedArts, addedArts = []) {
+  const hit = new Set(
+    [...(updatedArts || []), ...(addedArts || [])].map((a) => String(a).trim()).filter(Boolean),
+  );
+  const updated = [];
+  const notUpdated = [];
+  for (const row of rows || []) {
+    const artNo = String(row.artNo || "").trim();
+    const offer = String(row.offer || "").trim() || artNo;
+    const label = offer || artNo;
+    if (hit.has(offer) || hit.has(artNo)) {
+      updated.push(label);
+    } else {
+      notUpdated.push(label);
+    }
+  }
+  return { updated, notUpdated };
 }
