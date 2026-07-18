@@ -46,7 +46,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = resolve(__dirname, "..");
+const root = __dirname;
 
 loadEnvFile(join(root, ".env.local"));
 loadEnvFile(join(root, ".env"));
@@ -66,7 +66,7 @@ const config = {
     host: process.env.FTP_HOST || "",
     user: process.env.FTP_USER || "",
     password: process.env.FTP_PASSWORD || "",
-    remotePath: process.env.FTP_REMOTE_PATH || "/sinonim/stocks.csv",
+    remotePath: process.env.FTP_REMOTE_PATH || "/stocks.csv",
     secure: String(process.env.FTP_SECURE || "false").toLowerCase() === "true",
     port: Number(process.env.FTP_PORT || 21),
   },

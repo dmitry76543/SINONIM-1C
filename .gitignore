@@ -9,6 +9,7 @@ node_modules/
 
 # sync artifacts
 tmp/
+stocks.csv
 *.log
 
 # OS / IDE
